@@ -1,4 +1,5 @@
 #include "Commands/UnrealMCPEditorCommands.h"
+#include "IPythonScriptPlugin.h"
 #include "Commands/UnrealMCPCommonUtils.h"
 #include "Editor.h"
 #include "EditorViewportClient.h"
@@ -74,7 +75,11 @@ TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleCommand(const FString& C
     {
         return HandleTakeScreenshot(Params);
     }
-    
+    else if (CommandType == TEXT("execute_python"))
+    {
+        return HandleExecutePython(Params);
+    }
+
     return FUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Unknown editor command: %s"), *CommandType));
 }
 
@@ -598,3 +603,36 @@ TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleTakeScreenshot(const TSh
     
     return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Failed to take screenshot"));
 } 
+TSharedPtr<FJsonObject> FUnrealMCPEditorCommands::HandleExecutePython(const TSharedPtr<FJsonObject>& Params)
+{
+    FString Script;
+    if (!Params->TryGetStringField(TEXT("script"), Script) || Script.IsEmpty())
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("execute_python: missing 'script' parameter"));
+    }
+
+    IPythonScriptPlugin* Python = IPythonScriptPlugin::Get();
+    if (!Python || !Python->IsPythonAvailable())
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(TEXT("execute_python: Python scripting is not available"));
+    }
+
+    FPythonCommandEx Cmd;
+    Cmd.Command = Script;
+    Cmd.ExecutionMode = EPythonCommandExecutionMode::ExecuteFile;
+    Cmd.FileExecutionScope = EPythonFileExecutionScope::Public;
+
+    const bool bOk = Python->ExecPythonCommandEx(Cmd);
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetBoolField(TEXT("success"), bOk);
+    if (!Cmd.CommandResult.IsEmpty())
+    {
+        Result->SetStringField(TEXT("output"), Cmd.CommandResult);
+    }
+    if (!bOk && !Cmd.CommandResult.IsEmpty())
+    {
+        return FUnrealMCPCommonUtils::CreateErrorResponse(Cmd.CommandResult);
+    }
+    return Result;
+}
