@@ -86,6 +86,12 @@ by the other commands — asset editing, data asset population, batch operations
 
 ## Useful Procedures — Update This Section
 
+### Sandbox note — localhost connections
+The Claude Code sandbox blocks localhost TCP by default. All MCP `send_command` calls from
+the host terminal must use `dangerouslyDisableSandbox=true` on the Bash tool call.
+The port is 55557; verify the editor is running first with `ss -tlnp | grep 55557` (also
+needs sandbox disabled — alternatively check `Saved/Logs/VayuSim*.log` for "Server started").
+
 ### Populate a UDataAsset via MCP
 Use `execute_python` with the `unreal` module. Example: editing a `UServeGISRoadStyleTable`:
 ```python
@@ -100,6 +106,75 @@ table.set_editor_property("entries", entries)
 unreal.EditorAssetLibrary.save_asset("/MyPlugin/Data/MyTable")
 ```
 See `ServeGISTools/Scripts/mcp_setup_road_style_table.py` for a full working example.
+
+### Blueprint/preset CDO properties
+Presets are Blueprint classes. Use `unreal.load_class(None, "/Path/Name.Name_C")` then
+`unreal.get_default_object(cls)` to get the CDO. Lane structs: `unreal.DynamicRoadLaneProfile`
+with properties `type` (unreal.LaneType enum) and `width` (float, cm). Module structs:
+`unreal.DynamicRoadDrawPresetModule` with `module_class` (a Blueprint class ref).
+Lane type enum values: `NORMAL`, `BORDER`, `SHOULDER`, `MEDIAN`, `CENTER_TURN`, `PARKING`, `RESTRICTED`.
+
+### Read output from Unreal Python
+`unreal.log()` goes to the editor Output Log, NOT to the TCP response.
+To get data back from `execute_python`, write to a temp file and read it from Python:
+```python
+# In the execute_python script:
+import json
+with open("/tmp/result.json", "w") as f:
+    json.dump(result, f)
+
+# In the host Python after send_command:
+with open("/tmp/result.json") as f:
+    data = json.load(f)
+```
+
+---
+
+## ServeGISTools Plugin
+
+### GIS MCP Utilities
+`ServeGISTools/Scripts/gis_mcp_utils.py` is a Python module with ready-to-use functions.
+Execute it directly via MCP to get a world state snapshot, or exec() it to call functions.
+
+**Key functions:**
+| function | description |
+|---|---|
+| `snapshot_world()` | Write GeoAnchors + road networks + style table to `/tmp/gis_state.json` |
+| `list_geo_anchors()` | All AServeGeoAnchor actors with EPSG, origin XY, Z |
+| `list_road_networks()` | All ADynamicRoadNetwork actors with road counts |
+| `delete_road_networks(pattern)` | Delete networks matching name pattern (None = all) |
+| `get_style_table_info(path)` | List entries in a UServeGISRoadStyleTable |
+| `inspect_preset(name)` | Lane layout + modules for a road preset CDO |
+| `list_gpkg_layers(path)` | List layers + feature counts in a GeoPackage file |
+| `get_gpkg_layer_schema(path, layer)` | Field names/types for a GeoPackage layer |
+| `create_road_network_from_gpkg(...)` | Full road creation pipeline from a GeoPackage layer |
+
+**Road creation example:**
+```python
+exec(open("/path/to/Scripts/gis_mcp_utils.py").read())
+result = create_road_network_from_gpkg(
+    gpkg_path="/path/to/data.gpkg",
+    layer_name="lines",
+    anchor_name=None,            # auto-finds first anchor
+    style_table_path="/ServeGISTools/Roads/RoadStyleSet_Default",
+    vertical_offset_cm=25.0,
+    sample_eps_m=0.5,
+)
+```
+
+**GDAL binaries** are at `ServeGISTools/Source/ThirdParty/GDAL/_prefix/Linux/x86_64/bin/`.
+`ogrinfo` and `ogr2ogr` work via subprocess from execute_python. Set `LD_LIBRARY_PATH` to
+the corresponding `lib/` directory, `GDAL_DATA` to `share/gdal`, `PROJ_DATA` to `share/proj`.
+
+### Road preset content paths
+All presets: `/ServeGISTools/Roads/Presets/<Name>.<Name>_C`
+Style table:  `/ServeGISTools/Roads/RoadStyleSet_Default`
+OSM highway= tag → preset mapping is in the style table; modify via MCP script or Content Browser.
+
+### Trace vertical offset default
+Default is **25 cm** (set in `SServeGISRoadsPanel.cpp`). Applied as:
+`BaseElevation = LandscapeHitZ + VerticalOffsetCm + LayerTagOffsetCm`
+where `LayerTagOffsetCm = OSM_layer_value * LayerElevFactorCm` (default 500 cm/unit = 5 m).
 
 ### Hot-reload after C++ rebuild
 After rebuilding the UnrealMCP plugin, the editor must reload it before new commands
